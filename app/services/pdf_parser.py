@@ -49,57 +49,37 @@ async def parse_pdf_to_markdown(file_path: Path) -> tuple[str, int]:
     """
     log.info("Parsing PDF: %s", file_path)
 
+    try:
+        import pymupdf4llm 
+        import fitz
+    except ImportError as exc:
+        raise PDFParseError(
+            "pymupdf4llm is not installed. Run: pip install pymupdf4llm"
+        ) from exc
+
     if not file_path.exists():
         raise PDFParseError(f"File not found at path: {file_path}")
 
-    # ── Simulated async I/O latency (remove in production) ───────────────────
-    await asyncio.sleep(0.1)
-
-    # ── Mock output that mirrors real LlamaParse Markdown structure ───────────
-    mock_markdown = f"""---
-title: Parsed Document
-source: {file_path.name}
----
-
-# Chapter 1 — Introduction to Knowledge Graphs
-
-Knowledge graphs encode information as a set of **entities** (nodes) and
-**relationships** (edges). When combined with vector similarity search,
-they enable **GraphRAG** — retrieval-augmented generation that is both
-semantically rich and topologically aware.
-
-## 1.1 Core Concepts
-
-- **Node**: An entity (Person, Organisation, Concept, Document …)
-- **Edge**: A directed relationship between two nodes
-- **Property**: A key-value attribute on a node or edge
-- **Embedding**: A dense vector representation of text
-
-## 1.2 Open Knowledge Format (OKF)
-
-OKF is a YAML-front-matter Markdown standard that encodes each block of
-knowledge with:
-
-```yaml
-okf_type: concept
-title: "Graph Neural Networks"
-tags: [ml, graph, deep-learning]
-links:
-  - target: "Embeddings"
-    relation: USES
-  - target: "Node Classification"
-    relation: ENABLES
-```
-
-Each block can carry free-form prose beneath the front matter.
-
-# Chapter 2 — Vector Embeddings
-
-Embeddings map text to a high-dimensional vector space …
-"""
-
-    # Rough page count from section headers
-    page_count = mock_markdown.count("# Chapter")
-
-    log.info("PDF parsed successfully. Estimated pages: %d", page_count)
-    return mock_markdown, page_count
+    try:
+        # Run the CPU-bound PDF parsing in a thread pool to avoid blocking async
+        loop = asyncio.get_event_loop()
+        
+        # 1. Convert PDF to Markdown
+        markdown_text = await loop.run_in_executor(
+            None, 
+            lambda: pymupdf4llm.to_markdown(str(file_path))
+        )
+        
+        # 2. Get accurate page count
+        def _get_page_count():
+            with fitz.open(str(file_path)) as doc:
+                return len(doc)
+                
+        page_count = await loop.run_in_executor(None, _get_page_count)
+        
+        log.info("PDF parsed successfully. Pages: %d, Length: %d chars", page_count, len(markdown_text))
+        return markdown_text, page_count
+        
+    except Exception as exc:
+        log.exception("Failed to parse PDF: %s", exc)
+        raise PDFParseError(f"PDF Parsing failed: {exc}") from exc

@@ -23,7 +23,7 @@ SSE Frame Format (text/event-stream)
 from __future__ import annotations
 
 import json
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 from uuid import UUID, uuid4
 
 from openai import AsyncOpenAI
@@ -136,29 +136,28 @@ class LiveThoughtCallbackHandler:
         )
 
         try:
-            async with client.chat.completions.stream(
+            stream = await client.chat.completions.create(
                 model=settings.DEEPSEEK_MODEL,
                 messages=messages,
-                # DeepSeek-specific reasoning parameters (ignored by other providers)
-                # max_tokens=8192,
-            ) as stream:
-                async for chunk in stream:
-                    if not chunk.choices:
-                        continue
+                stream=True
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
 
-                    delta = chunk.choices[0].delta
+                delta = chunk.choices[0].delta
 
-                    # ── Reasoning / thinking tokens ────────────────────────────
-                    reasoning = getattr(delta, "reasoning_content", None)
-                    if reasoning:
-                        self._thought_buffer.append(reasoning)
-                        yield self._sse("thought", reasoning)
+                # ── Reasoning / thinking tokens ────────────────────────────
+                reasoning = getattr(delta, "reasoning_content", None)
+                if reasoning:
+                    self._thought_buffer.append(reasoning)
+                    yield self._sse("thought", reasoning)
 
-                    # ── Final answer tokens ────────────────────────────────────
-                    answer = getattr(delta, "content", None) or ""
-                    if answer:
-                        self._answer_buffer.append(answer)
-                        yield self._sse("answer", answer)
+                # ── Final answer tokens ────────────────────────────────────
+                answer = getattr(delta, "content", None) or ""
+                if answer:
+                    self._answer_buffer.append(answer)
+                    yield self._sse("answer", answer)
 
             # ── Stream finished ────────────────────────────────────────────────
             yield self._sse("done", "")
@@ -226,3 +225,47 @@ async def stream_chat_response(
     handler = LiveThoughtCallbackHandler(conversation_id=conv_id)
     async for frame in handler.stream(client, messages):
         yield frame
+
+
+async def generate_chat_response(
+    user_message: str,
+    context_records: list[dict],
+    conversation_id: UUID | None = None,
+) -> dict[str, Any]:
+    """
+    Top-level async function for a non-streaming /chat route.
+    Returns the full response and thought in a single dictionary.
+    """
+    conv_id: UUID = conversation_id or uuid4()
+    client = AsyncOpenAI(
+        api_key=settings.DEEPSEEK_API_KEY,
+        base_url=settings.DEEPSEEK_BASE_URL,
+    )
+
+    system_prompt = _build_system_prompt(context_records)
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": user_message},
+    ]
+
+    log.info(
+        "Sending DeepSeek request (non-streaming). conversation_id=%s model=%s",
+        conv_id,
+        settings.DEEPSEEK_MODEL,
+    )
+
+    response = await client.chat.completions.create(
+        model=settings.DEEPSEEK_MODEL,
+        messages=messages,
+        stream=False
+    )
+
+    message = response.choices[0].message
+    answer = message.content or ""
+    thought = getattr(message, "reasoning_content", None)
+
+    return {
+        "answer": answer,
+        "thought": thought,
+        "conversation_id": conv_id
+    }

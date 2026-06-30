@@ -127,6 +127,56 @@ async def _run_extractor(markdown_text: str) -> list[ExtractedEntity]:
 
 # ── Agent 2 — Synthesizer ─────────────────────────────────────────────────────
 
+def _extract_section_body(entity: ExtractedEntity, markdown_text: str) -> str:
+    """
+    Extract the actual content from markdown that is relevant to a given entity.
+
+    Strategy:
+    - For heading-based entities: extract all text under that heading until the
+      next heading of the same or higher level.
+    - For bold-term entities: extract a context window (±3 paragraphs) around
+      the first occurrence of the term.
+    """
+    name = entity.name
+    lines = markdown_text.splitlines()
+
+    # ── Strategy 1: Heading section extraction ─────────────────────────────────
+    # Find lines that match "# Title" / "## Title" / "### Title"
+    heading_pattern = re.compile(r"^(#{1,3})\s+(.+)$")
+    for i, line in enumerate(lines):
+        m = heading_pattern.match(line)
+        if m and m.group(2).strip().lower() == name.lower():
+            level = len(m.group(1))  # number of # characters
+            # Collect lines until the next heading of equal or higher level
+            body_lines: list[str] = []
+            for subsequent_line in lines[i + 1 :]:
+                next_heading = heading_pattern.match(subsequent_line)
+                if next_heading and len(next_heading.group(1)) <= level:
+                    break
+                body_lines.append(subsequent_line)
+
+            body_text = "\n".join(body_lines).strip()
+            if body_text:
+                return f"## {name}\n\n{body_text}"
+
+    # ── Strategy 2: Context window around bold/inline mention ──────────────────
+    # Split into paragraphs and find the one(s) that mention the term
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", markdown_text) if p.strip()]
+    mention_pattern = re.compile(re.escape(name), re.IGNORECASE)
+    matching_indices = [i for i, p in enumerate(paragraphs) if mention_pattern.search(p)]
+
+    if matching_indices:
+        first = matching_indices[0]
+        # Take up to 3 paragraphs around the first match
+        start = max(0, first - 1)
+        end = min(len(paragraphs), first + 3)
+        excerpt = "\n\n".join(paragraphs[start:end])
+        return f"## {name}\n\n{excerpt}"
+
+    # ── Fallback: use the entity's source_excerpt ──────────────────────────────
+    return f"## {name}\n\n{entity.source_excerpt}"
+
+
 async def _run_synthesizer(
     entities: list[ExtractedEntity],
     markdown_text: str,
@@ -134,18 +184,19 @@ async def _run_synthesizer(
     """
     Agent 2: OKF Markdown Block Synthesis
 
-    Production: For each entity, call the LLM with the surrounding context
-    window and ask it to produce a canonical OKF YAML front-matter block
-    plus a concise prose description.
+    Extracts the real surrounding content from the source markdown for each
+    entity, producing OKF blocks with substantive body text grounded in the
+    original document. This ensures that Neo4j nodes contain actual knowledge
+    rather than placeholder stubs.
 
-    Mock: Deterministically generate OKF blocks from entity metadata.
+    Production upgrade: Replace body extraction with an LLM call that
+    summarises/rewrites the extracted excerpt into clean OKF prose.
     """
     log.info("[Synthesizer] Synthesizing %d OKF blocks …", len(entities))
     await asyncio.sleep(0.05)
 
     okf_raw_blocks: list[dict[str, Any]] = []
 
-    # Group entities into concept clusters (mock: treat each entity as a block)
     for idx, entity in enumerate(entities):
         # Build cross-links to neighbouring entities
         links = []
@@ -158,20 +209,16 @@ async def _run_synthesizer(
                 {"target": entities[idx - 1].name, "relation": "PREV"}
             )
 
+        # Extract the actual content from the markdown for this entity
+        body = _extract_section_body(entity, markdown_text)
+
         okf_raw_blocks.append(
             {
                 "title": entity.name,
                 "okf_type": entity.entity_type,
                 "tags": [entity.entity_type, "auto-generated"],
                 "links": links,
-                "body": (
-                    f"## {entity.name}\n\n"
-                    f"*Type*: `{entity.entity_type}`\n\n"
-                    f"This concept was extracted from the source document "
-                    f"and synthesized into the Open Knowledge Format. "
-                    f"Further enrichment can be applied by re-running the "
-                    f"Synthesizer agent with a larger context window."
-                ),
+                "body": body,
             }
         )
 

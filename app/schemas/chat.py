@@ -45,3 +45,10 @@ class ChatStreamEvent(BaseModel):
     )
     content: str = Field(..., description="Token or message payload.")
     conversation_id: UUID = Field(default_factory=uuid4)
+
+
+class ChatResponse(BaseModel):
+    """Synchronous chat response model."""
+    answer: str = Field(..., description="The final answer from the LLM.")
+    thought: str | None = Field(default=None, description="The internal reasoning/thinking of the model.")
+    conversation_id: UUID = Field(..., description="The conversation UUID.")
