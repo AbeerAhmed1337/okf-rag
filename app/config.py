@@ -32,11 +32,11 @@ class Settings(BaseSettings):
     # ── DeepSeek / OpenAI-compatible LLM ──────────────────────────────────────
     DEEPSEEK_API_KEY: str = "sk-placeholder"
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL: str = "deepseek-reasoner"
+    DEEPSEEK_MODEL: str = "deepseek-v4-flash"  # Replaces deprecated deepseek-reasoner (2026-07-24)
 
     # ── Embedding ─────────────────────────────────────────────────────────────
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSIONS: int = 1536
+    EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"  # Local sentence-transformers model, 384-dim
+    EMBEDDING_DIMENSIONS: int = 384
 
     # ── File Upload ───────────────────────────────────────────────────────────
     UPLOAD_DIR: str = "/tmp/okf_uploads"

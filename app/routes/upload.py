@@ -12,16 +12,15 @@ Ingest pipeline:
 
 from __future__ import annotations
 
-import os
 import uuid
-import aiofiles
 from pathlib import Path
 
+import aiofiles
 from fastapi import APIRouter, Depends, File, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings, Settings
-from app.exceptions import FileTooLargeError, OKFCompilationError
+from app.exceptions import FileTooLargeError
 from app.logger import get_logger
 from app.schemas.upload import OKFNodeMeta, UploadResponse, UploadStatus
 from app.services.embedding import generate_embeddings_batch
@@ -43,7 +42,6 @@ async def _save_upload(file: UploadFile, settings: Settings) -> Path:
     upload_dir = Path(settings.UPLOAD_DIR)
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # Unique filename to avoid collisions
     safe_name = f"{uuid.uuid4().hex}_{Path(file.filename or 'upload.pdf').name}"
     dest_path = upload_dir / safe_name
 
@@ -51,7 +49,7 @@ async def _save_upload(file: UploadFile, settings: Settings) -> Path:
     bytes_written = 0
 
     async with aiofiles.open(dest_path, "wb") as out_file:
-        while chunk := await file.read(65536):  # 64 KiB chunks
+        while chunk := await file.read(65536):
             bytes_written += len(chunk)
             if bytes_written > max_bytes:
                 await out_file.close()
@@ -87,38 +85,35 @@ async def upload_pdf(
 
     Accepts a multipart PDF upload, runs it through the full OKF compilation
     pipeline, and persists the resulting graph nodes to Neo4j.
-
-    - **202 Accepted** — all steps completed; returns task metadata.
-    - Background task support (Celery/ARQ) can be added by offloading
-      stages 2-5 to a worker and returning immediately with a task_id.
     """
     task_id = uuid.uuid4()
     log.info("Upload received. task_id=%s filename=%s", task_id, file.filename)
 
-    # ── 1. Validate content type ───────────────────────────────────────────────
-    if file.content_type not in ("application/pdf", "application/octet-stream"):
-        log.warning("Rejected non-PDF upload: %s", file.content_type)
-        # Allow octet-stream for clients that don't set MIME correctly
-
-    # ── 2. Save to disk ───────────────────────────────────────────────────────
-    file_path = await _save_upload(file, settings)
+    file_path: Path | None = None
 
     try:
-        # ── 3. Parse PDF → Markdown ───────────────────────────────────────────
+        # ── 1. Save to disk ───────────────────────────────────────────────────
+        file_path = await _save_upload(file, settings)
+
+        # ── 2. Parse PDF → Markdown ───────────────────────────────────────────
         markdown_text, page_count = await parse_pdf_to_markdown(file_path)
+        log.info("PDF parsed. task_id=%s pages=%d", task_id, page_count)
 
-        # ── 4. Multi-agent OKF compilation ────────────────────────────────────
+        # ── 3. Multi-agent OKF compilation ────────────────────────────────────
         okf_blocks: list[OKFBlock] = await compile_markdown_to_okf(markdown_text)
+        log.info("OKF compiled. task_id=%s blocks=%d", task_id, len(okf_blocks))
 
-        # ── 5. Generate embeddings for all blocks (batch call) ────────────────
+        # ── 4. Generate embeddings for all blocks (batch call) ────────────────
         block_texts = [f"{b.title}\n{b.body}" for b in okf_blocks]
         embeddings = await generate_embeddings_batch(block_texts)
+        log.info("Embeddings generated. task_id=%s count=%d", task_id, len(embeddings))
 
-        # ── 6. Persist to Neo4j ───────────────────────────────────────────────
+        # ── 5. Persist to Neo4j ───────────────────────────────────────────────
         async with neo4j_client.session() as session:
             persisted = await persist_okf_blocks(session, okf_blocks, embeddings)
+        log.info("Persisted to Neo4j. task_id=%s nodes=%d", task_id, len(persisted))
 
-        # ── 7. Build response metadata ────────────────────────────────────────
+        # ── 6. Build response ─────────────────────────────────────────────────
         okf_node_metas = [
             OKFNodeMeta(
                 node_id=p["node_id"],
@@ -142,10 +137,8 @@ async def upload_pdf(
         )
 
         log.info(
-            "Upload pipeline complete. task_id=%s nodes=%d concepts=%d",
-            task_id,
-            len(okf_node_metas),
-            concepts_total,
+            "Upload complete. task_id=%s nodes=%d concepts=%d",
+            task_id, len(okf_node_metas), concepts_total,
         )
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
@@ -153,7 +146,7 @@ async def upload_pdf(
         )
 
     finally:
-        # Always clean up the temp file to avoid disk exhaustion
-        if file_path.exists():
+        # Always clean up the temp file regardless of success or failure
+        if file_path and file_path.exists():
             file_path.unlink(missing_ok=True)
             log.debug("Temp file removed: %s", file_path)

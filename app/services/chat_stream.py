@@ -171,7 +171,8 @@ class LiveThoughtCallbackHandler:
         except Exception as exc:
             log.exception("Stream error: %s", exc)
             yield self._sse("error", f"Stream error: {exc}")
-            raise ChatStreamError(str(exc)) from exc
+            # Do NOT re-raise here — the response has already started.
+            # The error frame above notifies the client cleanly.
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
