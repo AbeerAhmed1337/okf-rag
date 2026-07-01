@@ -8,3 +8,8 @@ neo4j>=5.20.0
 openai>=1.35.0
 pyyaml>=6.0.1
 sentence-transformers>=3.0.0
+# ── OKF Pipeline additions ─────────────────────────────────────────────────────
+langgraph>=0.2.0          # LangGraph StateGraph pipeline
+motor>=3.4.0              # Async MongoDB driver (GridFS)
+pymupdf4llm>=0.0.17       # PDF → Markdown extraction
+pymupdf>=1.24.0           # Low-level PDF page-count & fitz

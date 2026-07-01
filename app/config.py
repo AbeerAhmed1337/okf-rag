@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"  # Local sentence-transformers model, 384-dim
     EMBEDDING_DIMENSIONS: int = 384
 
+    # ── MongoDB / GridFS ──────────────────────────────────────────────────────
+    MONGO_URI: str = ""          # e.g. mongodb://localhost:27017  (empty = disabled)
+    MONGO_DB_NAME: str = "okf_rag"
+
     # ── File Upload ───────────────────────────────────────────────────────────
     UPLOAD_DIR: str = "/tmp/okf_uploads"
     MAX_UPLOAD_SIZE_MB: int = 50
